@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <getopt.h>
+#include <sys/time.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
@@ -37,6 +38,10 @@ struct pbinfo {
 
 	union {
 		double distance;
+		struct {
+			double last_tap;
+			int on;
+		} taphist;
 	};
 
 	SPLAY_ENTRY(pbinfo) splaynode;
@@ -49,6 +54,7 @@ static enum {
 	REL__UNSET_,
 	REL_SPEED,
 	REL_DISTANCE,
+	REL_DOUBLETAP,
 } releasemode = REL__UNSET_;
 
 /* Pixels or speed needed to release pointer from barrier */
@@ -83,6 +89,7 @@ static inline struct pbinfo* find_pbi(PointerBarrier pb)
 	return SPLAY_FIND(pbmap, &pbmap, &k);
 }
 
+/* Error-checking malloc() wrapper */
 static inline void* xmalloc(size_t s)
 {
 	void* p = malloc(s);
@@ -91,6 +98,17 @@ static inline void* xmalloc(size_t s)
 		exit(1);
 	}
 	return p;
+}
+
+/* Return the current seconds-since-epoch time as a double */
+static inline double dnow(void)
+{
+	struct timeval t;
+	if (gettimeofday(&t, NULL)) {
+		fprintf(stderr, "gettimeofday: %s\n", strerror(errno));
+		abort();
+	}
+	return (double)t.tv_sec + (((double)t.tv_usec) / 1000000);
 }
 
 static void handle_barrier_leave(XIBarrierEvent* event)
@@ -106,6 +124,10 @@ static void handle_barrier_leave(XIBarrierEvent* event)
 	case REL_SPEED:
 		break;
 
+	case REL_DOUBLETAP:
+		pbi->taphist.on = 0;
+		break;
+
 	default:
 		fprintf(stderr, "Internal error: invalid pbi->dir (%u)\n", pbi->dir);
 		abort();
@@ -115,7 +137,7 @@ static void handle_barrier_leave(XIBarrierEvent* event)
 static void handle_barrier_hit(XIBarrierEvent* event)
 {
 	int release;
-	double d;
+	double d, now;
 	struct pbinfo* pbi = find_pbi(event->barrier);
 	dbg("BarrierHit [%lu], delta: %.2f/%.2f\n", event->barrier, event->dx, event->dy);
 
@@ -154,6 +176,18 @@ static void handle_barrier_hit(XIBarrierEvent* event)
 		release = pbi->distance > threshold;
 		if (release)
 			pbi->distance = 0.0;
+		break;
+
+	case REL_DOUBLETAP:
+		if (!pbi->taphist.on) {
+			now = dnow();
+			release = (now - pbi->taphist.last_tap) < threshold;
+			if (!release) {
+				pbi->taphist.last_tap = now;
+				pbi->taphist.on = 1;
+			}
+		} else
+			release = 0;
 		break;
 
 	default:
@@ -260,7 +294,7 @@ static void setup_barriers(void)
 
 static void usage(FILE* out)
 {
-	fprintf(out, "Usage: %s [ -h | -d DISTANCE | -s SPEED ]\n", progname);
+	fprintf(out, "Usage: %s [ -h | -d DISTANCE | -s SPEED | -m SECONDS ]\n", progname);
 }
 
 static void set_options(int argc, char** argv)
@@ -268,16 +302,19 @@ static void set_options(int argc, char** argv)
 	int opt;
 	char* end;
 
-	while ((opt = getopt(argc, argv, "d:s:h")) != -1) {
+	while ((opt = getopt(argc, argv, "d:s:m:h")) != -1) {
 		switch (opt) {
 		case 'd':
 		case 's':
+		case 'm':
 			if (releasemode != REL__UNSET_) {
 				fprintf(stderr, "Error: multiple release modes selected\n");
 				usage(stderr);
 				exit(1);
 			}
-			releasemode = opt == 'd' ? REL_DISTANCE : REL_SPEED;
+			releasemode = opt == 'd' ? REL_DISTANCE
+				: opt == 's' ? REL_SPEED
+				: REL_DOUBLETAP;
 			threshold = strtod(optarg, &end);
 			if (!*optarg || *end || threshold < 0.0) {
 				fprintf(stderr, "Invalid threshold '%s' (must be numeric and non-negative)\n",

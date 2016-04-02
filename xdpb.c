@@ -339,18 +339,20 @@ int main(int argc, char** argv)
 	XSync(dpy, False);
 	for (;;) {
 		XNextEvent(dpy, &xev);
-		if (xev.type == GenericEvent || xev.xcookie.extension != xi2_opcode) {
-			cookie = &xev.xcookie;
+		if (xev.type != GenericEvent && xev.xcookie.extension == xi2_opcode)
+			continue;
 
-			if (cookie->evtype == XI_BarrierHit || XI_BarrierLeave) {
-				if (XGetEventData(dpy, cookie)) {
-					if (cookie->evtype == XI_BarrierHit)
-						handle_barrier_hit(cookie->data);
-					else
-						handle_barrier_leave(cookie->data);
-					XFreeEventData(dpy, cookie);
-				}
-			}
+		cookie = &xev.xcookie;
+
+		if (cookie->evtype != XI_BarrierHit && cookie->evtype != XI_BarrierLeave)
+			continue;
+
+		if (XGetEventData(dpy, cookie)) {
+			if (cookie->evtype == XI_BarrierHit)
+				handle_barrier_hit(cookie->data);
+			else
+				handle_barrier_leave(cookie->data);
+			XFreeEventData(dpy, cookie);
 		}
 	}
 }

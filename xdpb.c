@@ -1,25 +1,167 @@
 /*
- * Derived (roughly) from pointer-barriers-interactive.c by Jasper St. Pierre.
+ * xdpb -- X Display Pointer Barriers.
+ *
+ * Sets up pointer barriers at the edges of each display, so making it easier
+ * to position the mouse at the edges of things (e.g. for scroll bars, etc.).
+ *
+ * This file began life as a modified version of
+ * pointer-barriers-interactive.c by Jasper St. Pierre (not that there's much
+ * left of it).
  */
 
 #include <time.h>
 #include <math.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <getopt.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/XInput2.h>
+#include <X11/extensions/Xrandr.h>
 
-static Display *dpy;
+#include <bsd/sys/tree.h>
 
-static void handle_barrier_event(XIBarrierEvent *event)
+#ifdef DEBUG
+#define dbg(...) (void)fprintf(stderr, __VA_ARGS__)
+#else
+/* Define as an empty function so arguments get used */
+static inline void dbg(const char *fmt, ...) { }
+#endif
+
+struct pbinfo {
+	PointerBarrier bar;
+	int dir;
+
+	union {
+		double distance;
+	};
+
+	SPLAY_ENTRY(pbinfo) splaynode;
+};
+
+static const char* progname;
+
+/* What mechanism we use to trigger release */
+static enum {
+	REL__UNSET_,
+	REL_SPEED,
+	REL_DISTANCE,
+} releasemode = REL__UNSET_;
+
+/* Pixels or speed needed to release pointer from barrier */
+static double threshold;
+
+static Display* dpy;
+static Window rootwin;
+
+/* So we can look up a struct pbinfo from a PointerBarrier */
+static SPLAY_HEAD(pbmap, pbinfo) pbmap;
+
+static inline int pbcmp(const struct pbinfo* a, const struct pbinfo* b) { return a->bar - b->bar; }
+
+/* Grrr...why are there no _STATIC variants of these?? */
+SPLAY_PROTOTYPE(pbmap, pbinfo, splaynode, pbcmp);
+SPLAY_GENERATE(pbmap, pbinfo, splaynode, pbcmp);
+
+/* Add pbi to pbmap */
+static inline void add_pbi(struct pbinfo* pbi)
 {
-	printf("   root coordinates: %.2f/%.2f\n", event->root_x, event->root_y);
-	printf("   delta: %.2f/%.2f\n", event->dx, event->dy);
+	struct pbinfo* old = SPLAY_INSERT(pbmap, &pbmap, pbi);
+	if (old) {
+		fprintf(stderr, "Internal error: PointerBarrier %lu already in pbmap??\n", pbi->bar);
+		abort();
+	}
+}
 
-	if (fabs(event->dy) > 15.0) {
+/* Lookup pb in pbmap */
+static inline struct pbinfo* find_pbi(PointerBarrier pb)
+{
+	struct pbinfo k = { .bar = pb, };
+	return SPLAY_FIND(pbmap, &pbmap, &k);
+}
+
+static inline void* xmalloc(size_t s)
+{
+	void* p = malloc(s);
+	if (!p) {
+		fprintf(stderr, "malloc: %s", strerror(errno));
+		exit(1);
+	}
+	return p;
+}
+
+static void handle_barrier_leave(XIBarrierEvent* event)
+{
+	struct pbinfo* pbi = find_pbi(event->barrier);
+	dbg("BarrierLeave [%lu], delta: %.2f/%.2f\n", event->barrier, event->dx, event->dy);
+
+	switch (releasemode) {
+	case REL_DISTANCE:
+		pbi->distance = 0.0;
+		break;
+
+	case REL_SPEED:
+		break;
+
+	default:
+		fprintf(stderr, "Internal error: invalid pbi->dir (%u)\n", pbi->dir);
+		abort();
+	}
+}
+
+static void handle_barrier_hit(XIBarrierEvent* event)
+{
+	int release;
+	double d;
+	struct pbinfo* pbi = find_pbi(event->barrier);
+	dbg("BarrierHit [%lu], delta: %.2f/%.2f\n", event->barrier, event->dx, event->dy);
+
+	switch (pbi->dir) {
+	case BarrierPositiveX:
+		d = -event->dx;
+		break;
+	case BarrierNegativeX:
+		d = event->dx;
+		break;
+	case BarrierPositiveY:
+		d = -event->dy;
+		break;
+	case BarrierNegativeY:
+		d = event->dy;
+		break;
+	default:
+		fprintf(stderr, "Internal error: invalid pbi->dir (%u)\n", pbi->dir);
+		abort();
+	}
+
+	/*
+	 * Apparent movement *away* from the barrier on a *hit* event seems to
+	 * happen sometimes; ignore it.
+	 */
+	if (d < 0.0)
+		return;
+
+	switch (releasemode) {
+	case REL_SPEED:
+		release = d > threshold;
+		break;
+
+	case REL_DISTANCE:
+		pbi->distance += d;
+		release = pbi->distance > threshold;
+		if (release)
+			pbi->distance = 0.0;
+		break;
+
+	default:
+		fprintf(stderr, "Internal error: invalid releasemode (%d)\n", releasemode);
+		abort();
+	}
+
+	if (release) {
 		XIBarrierReleasePointer(dpy, event->deviceid, event->barrier, event->eventid);
 		XFlush(dpy);
 	}
@@ -29,6 +171,11 @@ static void handle_barrier_event(XIBarrierEvent *event)
 static int check_extensions(void)
 {
 	int major, minor, opcode, evt, err;
+
+	if (!XQueryExtension(dpy, "RANDR", &opcode, &evt, &err)) {
+		fprintf(stderr, "XRandr extension not found\n");
+		exit(1);
+	}
 
 	if (!XQueryExtension(dpy, "XFIXES", &opcode, &evt, &err)) {
 		fprintf(stderr, "XFixes extension not found\n");
@@ -56,20 +203,122 @@ static int check_extensions(void)
 	return opcode;
 }
 
-int main(int argc, char **argv)
+static void mkbar(int x1, int y1, int x2, int y2, int directions)
+{
+	struct pbinfo* pbi;
+	PointerBarrier pb = XFixesCreatePointerBarrier(dpy, rootwin, x1, y1, x2, y2,
+	                                              directions, 0, NULL);
+	dbg("mkbar(%d, %d, %d, %d, %d) = %lu\n", x1, y1, x2, y2, directions, pb);
+#ifdef DEBUG
+	XSync(dpy, False);
+#endif
+
+	pbi = xmalloc(sizeof(*pbi));
+	memset(pbi, 0, sizeof(*pbi));
+	pbi->bar = pb;
+	pbi->dir = directions;
+
+	add_pbi(pbi);
+}
+
+static void setup_crtc_barriers(XRRCrtcInfo* ci)
+{
+	unsigned int xmin = ci->x, xmax = ci->x + ci->width - 1;
+	unsigned int ymin = ci->y, ymax = ci->y + ci->height - 1;
+
+	dbg("%s(%u, %u, %u, %u)\n", __func__, xmin, xmax, ymin, ymax);
+
+	mkbar(xmin, ymin, xmin, ymax, BarrierPositiveX);
+	mkbar(xmax, ymin, xmax, ymax, BarrierNegativeX);
+	mkbar(xmin, ymin, xmax, ymin, BarrierPositiveY);
+	mkbar(xmin, ymax, xmax, ymax, BarrierNegativeY);
+}
+
+static void setup_barriers(void)
+{
+	int i;
+	XRRCrtcInfo* crtcinfo;
+	XRRScreenResources* resources = XRRGetScreenResources(dpy, rootwin);
+
+	for (i = 0; i < resources->ncrtc; i++) {
+		crtcinfo = XRRGetCrtcInfo(dpy, resources, resources->crtcs[i]);
+
+		/*
+		 * For some reason there seems to be some magical N+1th
+		 * pseudo-CRTC with width == 0 and height == 0; let's not try
+		 * to set up pointer barriers around that one.
+		 */
+		if (crtcinfo->width > 0 && crtcinfo->height > 0)
+			setup_crtc_barriers(crtcinfo);
+
+		XRRFreeCrtcInfo(crtcinfo);
+	}
+
+	XSync(dpy, False);
+	XRRFreeScreenResources(resources);
+}
+
+static void usage(FILE* out)
+{
+	fprintf(out, "Usage: %s [ -h | -d DISTANCE | -s SPEED ]\n", progname);
+}
+
+static void set_options(int argc, char** argv)
+{
+	int opt;
+	char* end;
+
+	while ((opt = getopt(argc, argv, "d:s:h")) != -1) {
+		switch (opt) {
+		case 'd':
+		case 's':
+			if (releasemode != REL__UNSET_) {
+				fprintf(stderr, "Error: multiple release modes selected\n");
+				usage(stderr);
+				exit(1);
+			}
+			releasemode = opt == 'd' ? REL_DISTANCE : REL_SPEED;
+			threshold = strtod(optarg, &end);
+			if (!*optarg || *end || threshold < 0.0) {
+				fprintf(stderr, "Invalid threshold '%s' (must be numeric and non-negative)\n",
+				        optarg);
+				exit(1);
+			}
+			break;
+
+		case 'h':
+			usage(stdout);
+			exit(0);
+
+		default:
+			usage(stderr);
+			exit(1);
+		}
+	}
+
+	/* Apply defaults if nothing specified */
+	if (releasemode == REL__UNSET_) {
+		releasemode = REL_DISTANCE;
+		threshold = 50.0;
+	}
+}
+
+int main(int argc, char** argv)
 {
 	XEvent xev;
 	int xi2_opcode;
-	int dpy_w;
-	Window rootwin;
-	XGenericEventCookie *cookie;
-	const char *type;
+	XGenericEventCookie* cookie;
 	unsigned char mask_bits[XIMaskLen(XI_LASTEVENT)] = { 0, };
 	XIEventMask mask = {
 		.deviceid = XIAllMasterDevices,
 		.mask = mask_bits,
 		.mask_len = sizeof(mask_bits),
 	};
+
+	progname = strrchr(argv[0], '/');
+	progname = progname ? progname + 1 : argv[0];
+
+	set_options(argc, argv);
 
 	dpy = XOpenDisplay(NULL);
 	if (!dpy) {
@@ -79,10 +328,9 @@ int main(int argc, char **argv)
 
 	xi2_opcode = check_extensions();
 
-	dpy_w = DisplayWidth(dpy, DefaultScreen(dpy));
 	rootwin = XDefaultRootWindow(dpy);
 
-	XFixesCreatePointerBarrier(dpy, rootwin, 0, 600, dpy_w, 600, 0, 0, NULL);
+	setup_barriers();
 
 	XISetMask(mask_bits, XI_BarrierHit);
 	XISetMask(mask_bits, XI_BarrierLeave);
@@ -94,16 +342,14 @@ int main(int argc, char **argv)
 		if (xev.type == GenericEvent || xev.xcookie.extension != xi2_opcode) {
 			cookie = &xev.xcookie;
 
-			switch (cookie->evtype) {
-			case XI_BarrierHit: type = "BarrierHit"; break;
-			case XI_BarrierLeave: type = "BarrierLeave"; break;
-			}
-
-			printf("Event: %s\n", type);
-			if (cookie->evtype == XI_BarrierHit) {
-				if (XGetEventData(dpy, cookie))
-					handle_barrier_event(cookie->data);
-				XFreeEventData(dpy, cookie);
+			if (cookie->evtype == XI_BarrierHit || XI_BarrierLeave) {
+				if (XGetEventData(dpy, cookie)) {
+					if (cookie->evtype == XI_BarrierHit)
+						handle_barrier_hit(cookie->data);
+					else
+						handle_barrier_leave(cookie->data);
+					XFreeEventData(dpy, cookie);
+				}
 			}
 		}
 	}

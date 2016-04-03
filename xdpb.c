@@ -3,8 +3,8 @@
  *
  * Copyright (c) 2016, Zev Weiss <zev@bewilderbeest.net>
  *
- * Sets up pointer barriers at the edges of each display, so making it easier
- * to position the mouse at the edges of things (e.g. for scroll bars, etc.).
+ * Sets up pointer barriers at the edges of each display so that it's easier
+ * to position the mouse at screen edges (e.g. for scroll bars, etc.).
  *
  * This file began life as a modified version of
  * pointer-barriers-interactive.c by Jasper St. Pierre (not that there's much

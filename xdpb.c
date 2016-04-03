@@ -1,12 +1,26 @@
 /*
  * xdpb -- X Display Pointer Barriers.
  *
+ * Copyright (c) 2016, Zev Weiss <zev@bewilderbeest.net>
+ *
  * Sets up pointer barriers at the edges of each display, so making it easier
  * to position the mouse at the edges of things (e.g. for scroll bars, etc.).
  *
  * This file began life as a modified version of
  * pointer-barriers-interactive.c by Jasper St. Pierre (not that there's much
  * left of it).
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+ * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+ * IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #include <time.h>

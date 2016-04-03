@@ -46,6 +46,11 @@
 static inline void dbg(const char *fmt, ...) { }
 #endif
 
+#define internal_error(msg, ...) do { \
+		fprintf(stderr, "Internal error: "msg"\n", ##__VA_ARGS__); \
+		abort(); \
+	} while (0)
+
 struct pbinfo {
 	PointerBarrier bar;
 	int dir;
@@ -90,10 +95,8 @@ SPLAY_GENERATE(pbmap, pbinfo, splaynode, pbcmp);
 static inline void add_pbi(struct pbinfo* pbi)
 {
 	struct pbinfo* old = SPLAY_INSERT(pbmap, &pbmap, pbi);
-	if (old) {
-		fprintf(stderr, "Internal error: PointerBarrier %lu already in pbmap??\n", pbi->bar);
-		abort();
-	}
+	if (old)
+		internal_error("PointerBarrier %lu already in pbmap", pbi->bar);
 }
 
 /* Lookup pb in pbmap */
@@ -118,10 +121,8 @@ static inline void* xmalloc(size_t s)
 static inline double dnow(void)
 {
 	struct timeval t;
-	if (gettimeofday(&t, NULL)) {
-		fprintf(stderr, "gettimeofday: %s\n", strerror(errno));
-		abort();
-	}
+	if (gettimeofday(&t, NULL))
+		internal_error("gettimeofday: %s\n", strerror(errno));
 	return (double)t.tv_sec + (((double)t.tv_usec) / 1000000);
 }
 
@@ -143,8 +144,7 @@ static void handle_barrier_leave(XIBarrierEvent* event)
 		break;
 
 	default:
-		fprintf(stderr, "Internal error: invalid pbi->dir (%u)\n", pbi->dir);
-		abort();
+		internal_error("invalid pbi->dir (%u)", pbi->dir);
 	}
 }
 
@@ -169,8 +169,7 @@ static void handle_barrier_hit(XIBarrierEvent* event)
 		d = event->dy;
 		break;
 	default:
-		fprintf(stderr, "Internal error: invalid pbi->dir (%u)\n", pbi->dir);
-		abort();
+		internal_error("invalid pbi->dir (%u)", pbi->dir);
 	}
 
 	/*
@@ -205,8 +204,7 @@ static void handle_barrier_hit(XIBarrierEvent* event)
 		break;
 
 	default:
-		fprintf(stderr, "Internal error: invalid releasemode (%d)\n", releasemode);
-		abort();
+		internal_error("invalid releasemode (%d)", releasemode);
 	}
 
 	if (release) {

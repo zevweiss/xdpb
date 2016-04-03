@@ -1,11 +1,26 @@
 
-CC = gcc
+CC = cc
 CFLAGS = -Wall
 
-ifneq ($(DEBUG),)
-	CFLAGS += -gdwarf -g3 -DDEBUG=1
+INC = /usr/include
+SYSTREE = sys/tree.h
+BSDINC = $(INC)/bsd
+
+# Crude simulation of './configure'...
+exists = $(shell [ -e $1 ] && echo yes || echo no)
+
+ifeq ($(call exists, $(INC)/$(SYSTREE)),yes)
+# nothing to do here, #include <sys/tree.h> works by default
+else ifeq ($(call exists, $(BSDINC)/$(SYSTREE)),yes)
+CFLAGS += -idirafter $(BSDINC)
 else
-	CFLAGS += -O2
+$(error no sys/tree.h header found)
+endif
+
+ifneq ($(DEBUG),)
+CFLAGS += -ggdb3 -DDEBUG=1
+else
+CFLAGS += -O2
 endif
 
 XSUBLIBS = x11 xi xfixes xrandr

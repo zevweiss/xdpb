@@ -37,7 +37,7 @@
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/Xrandr.h>
 
-#include <bsd/sys/tree.h>
+#include <sys/tree.h>
 
 #ifdef DEBUG
 #define dbg(...) (void)fprintf(stderr, __VA_ARGS__)

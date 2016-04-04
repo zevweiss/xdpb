@@ -304,9 +304,17 @@ static void setup_barriers(void)
 	XRRFreeScreenResources(resources);
 }
 
-static void usage(FILE* out)
+static void usage(FILE* out, int full)
 {
 	fprintf(out, "Usage: %s [ -h | -d DISTANCE | -s SPEED | -m SECONDS ]\n", progname);
+	if (!full)
+		return;
+
+	fprintf(out, "Flags:\n");
+	fprintf(out, "\t-h %-12s print this usage message\n", "");
+	fprintf(out, "\t-d %-12s release after DISTANCE pixels of (suppressed) pointer travel\n", "DISTANCE");
+	fprintf(out, "\t-s %-12s release when cursor speed (against barrier) exceeds SPEED\n", "SPEED");
+	fprintf(out, "\t-m %-12s release on two taps against barrier within SECONDS seconds\n", "SECONDS");
 }
 
 static void set_options(int argc, char** argv)
@@ -321,7 +329,7 @@ static void set_options(int argc, char** argv)
 		case 'm':
 			if (releasemode != REL__UNSET_) {
 				fprintf(stderr, "Error: multiple release modes selected\n");
-				usage(stderr);
+				usage(stderr, 0);
 				exit(1);
 			}
 			releasemode = opt == 'd' ? REL_DISTANCE
@@ -336,11 +344,11 @@ static void set_options(int argc, char** argv)
 			break;
 
 		case 'h':
-			usage(stdout);
+			usage(stdout, 1);
 			exit(0);
 
 		default:
-			usage(stderr);
+			usage(stderr, 0);
 			exit(1);
 		}
 	}

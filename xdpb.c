@@ -30,14 +30,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <getopt.h>
+#include <search.h>
 #include <sys/time.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/Xrandr.h>
-
-#include <sys/tree.h>
 
 #ifdef DEBUG
 #define dbg(...) (void)fprintf(stderr, __VA_ARGS__)
@@ -62,8 +61,6 @@ struct pbinfo {
 			int on;
 		} taphist;
 	};
-
-	SPLAY_ENTRY(pbinfo) splaynode;
 };
 
 static const char* progname;
@@ -82,28 +79,31 @@ static double threshold;
 static Display* dpy;
 static Window rootwin;
 
-/* So we can look up a struct pbinfo from a PointerBarrier */
-static SPLAY_HEAD(pbmap, pbinfo) pbmap;
+/* Root of a tsearch() tree, so we can look up a struct pbinfo from a PointerBarrier */
+static void* pbmap = NULL;
 
-static inline int pbcmp(const struct pbinfo* a, const struct pbinfo* b) { return a->bar - b->bar; }
-
-/* Grrr...why are there no _STATIC variants of these?? */
-SPLAY_PROTOTYPE(pbmap, pbinfo, splaynode, pbcmp);
-SPLAY_GENERATE(pbmap, pbinfo, splaynode, pbcmp);
+static int pbcmp(const void* va, const void* vb)
+{
+	const struct pbinfo* a = va;
+	const struct pbinfo* b = vb;
+	return a->bar - b->bar;
+}
 
 /* Add pbi to pbmap */
-static inline void add_pbi(struct pbinfo* pbi)
+static inline void add_pbi(const struct pbinfo* pbi)
 {
-	struct pbinfo* old = SPLAY_INSERT(pbmap, &pbmap, pbi);
-	if (old)
+	struct pbinfo* old = tsearch(pbi, &pbmap, pbcmp);
+	if (*(struct pbinfo**)old != pbi)
 		internal_error("PointerBarrier %lu already in pbmap", pbi->bar);
 }
 
 /* Lookup pb in pbmap */
 static inline struct pbinfo* find_pbi(PointerBarrier pb)
 {
+	void* v;
 	struct pbinfo k = { .bar = pb, };
-	return SPLAY_FIND(pbmap, &pbmap, &k);
+	v = tfind(&k, &pbmap, pbcmp);
+	return v ? *(struct pbinfo**)v : v;
 }
 
 /* Error-checking malloc() wrapper */

@@ -9,11 +9,6 @@ pointer on UI elements (such as scroll bars) that often end up at or
 near "internal" screen edges (edges that border other screens) in
 multi-head setups.
 
-Note that due its use of the BSD `sys/tree.h` macros, to compile
-`xdpb` on Linux you'll probably need libbsd (or the relevant
-`-dev`/`-devel` package) installed (though it has no runtime
-dependency on the actual library).
-
 ### Usage
 
     xdpb [ -h | -d DISTANCE | -s SPEED | -m SECONDS ]

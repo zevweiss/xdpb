@@ -42,7 +42,7 @@
 #define dbg(...) (void)fprintf(stderr, __VA_ARGS__)
 #else
 /* Define as an empty function so arguments get used */
-static inline void dbg(const char *fmt, ...) { }
+static inline void dbg(const char* fmt, ...) { }
 #endif
 
 #define internal_error(msg, ...) do { \
@@ -103,7 +103,9 @@ static inline struct pbinfo* find_pbi(PointerBarrier pb)
 	void* v;
 	struct pbinfo k = { .bar = pb, };
 	v = tfind(&k, &pbmap, pbcmp);
-	return v ? *(struct pbinfo**)v : v;
+	if (!v)
+		internal_error("PointerBarrier %lu not found", pb);
+	return *(struct pbinfo**)v;
 }
 
 /* Error-checking malloc() wrapper */

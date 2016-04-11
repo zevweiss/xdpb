@@ -86,7 +86,7 @@ static int pbcmp(const void* va, const void* vb)
 {
 	const struct pbinfo* a = va;
 	const struct pbinfo* b = vb;
-	return a->bar - b->bar;
+	return (a->bar > b->bar) ? 1 : (a->bar < b->bar) ? -1 : 0;
 }
 
 /* Add pbi to pbmap */

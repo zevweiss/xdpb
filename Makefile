@@ -16,7 +16,7 @@ CFLAGS += $(XCFLAGS)
 default: xdpb
 
 xdpb: xdpb.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) -o $@ $< $(CFLAGS)
 
 .PHONY: clean
 clean:

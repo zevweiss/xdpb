@@ -78,6 +78,7 @@ static double threshold;
 
 static Display* dpy;
 static Window rootwin;
+static int xi2_opcode;
 
 /* Root of a tsearch() tree, so we can look up a struct pbinfo from a PointerBarrier */
 static void* pbmap = NULL;
@@ -215,8 +216,8 @@ static void handle_barrier_hit(XIBarrierEvent* event)
 	}
 }
 
-/* Check for necessary extensions, returning XI2 opcode */
-static int check_extensions(void)
+/* Check for necessary extensions, initializing XI2 opcode */
+static void check_extensions(void)
 {
 	int major, minor, opcode, evt, err;
 
@@ -235,7 +236,7 @@ static int check_extensions(void)
 		exit(1);
 	}
 
-	if (!XQueryExtension(dpy, "XInputExtension", &opcode, &evt, &err)) {
+	if (!XQueryExtension(dpy, "XInputExtension", &xi2_opcode, &evt, &err)) {
 		fprintf(stderr, "XInput extension not found\n");
 		exit(1);
 	}
@@ -247,8 +248,6 @@ static int check_extensions(void)
 		fprintf(stderr, "XInput too old (have %d.%d, need 2.2+)\n", major, minor);
 		exit(1);
 	}
-
-	return opcode;
 }
 
 static void mkbar(int x1, int y1, int x2, int y2, int directions)
@@ -365,7 +364,6 @@ static void set_options(int argc, char** argv)
 int main(int argc, char** argv)
 {
 	XEvent xev;
-	int xi2_opcode;
 	XGenericEventCookie* cookie;
 	unsigned char mask_bits[XIMaskLen(XI_LASTEVENT)] = { 0, };
 	XIEventMask mask = {
@@ -385,7 +383,7 @@ int main(int argc, char** argv)
 		return 1;
 	}
 
-	xi2_opcode = check_extensions();
+	check_extensions();
 
 	rootwin = XDefaultRootWindow(dpy);
 

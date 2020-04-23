@@ -1,7 +1,7 @@
 /*
  * xdpb -- X Display Pointer Barriers.
  *
- * Copyright (c) 2016, Zev Weiss <zev@bewilderbeest.net>
+ * Copyright (c), Zev Weiss <zev@bewilderbeest.net>
  *
  * Sets up pointer barriers at the edges of each display so that it's easier
  * to position the mouse at screen edges (e.g. for scroll bars, etc.).

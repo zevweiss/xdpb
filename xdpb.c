@@ -33,6 +33,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <getopt.h>
+#include <unistd.h>
+#include <signal.h>
 #include <search.h>
 #include <sys/time.h>
 #include <X11/Xatom.h>
@@ -82,6 +84,7 @@ static double threshold;
 static Display* dpy;
 static Window rootwin;
 static int xi2_opcode, xrr_opcode, xrr_event_base;
+static int sigpipe[2];
 
 /* Root of a tsearch() tree, so we can look up a struct pbinfo from a PointerBarrier */
 static void* pbmap = NULL;
@@ -397,10 +400,72 @@ static void set_options(int argc, char** argv)
 	}
 }
 
-int main(int argc, char** argv)
+static void sighdlr(int signo)
+{
+	if (write(sigpipe[1], &signo, sizeof(signo)) != sizeof(signo))
+		abort();
+}
+
+static void setup_sighdlr(void)
+{
+	struct sigaction sa = {
+		.sa_handler = sighdlr,
+		.sa_flags = 0,
+	};
+	if (sigfillset(&sa.sa_mask))
+		abort();
+
+	if (pipe(sigpipe)) {
+		perror("pipe");
+		exit(1);
+	}
+
+	if (sigaction(SIGINT, &sa, NULL)) {
+		perror("sigaction(SIGINT)");
+		abort();
+	}
+
+	if (sigaction(SIGTERM, &sa, NULL)) {
+		perror("sigaction(SIGTERM)");
+		abort();
+	}
+}
+
+static void handle_xevent(void)
 {
 	XEvent xev;
 	XGenericEventCookie* cookie;
+	XNextEvent(dpy, &xev);
+
+	if (xev.type == GenericEvent) {
+		cookie = &xev.xcookie;
+		if (!XGetEventData(dpy, cookie))
+			return;
+
+		if (cookie->extension == xi2_opcode) {
+			switch (cookie->evtype) {
+			case XI_BarrierHit:
+				handle_barrier_hit(cookie->data);
+				break;
+			case XI_BarrierLeave:
+				handle_barrier_leave(cookie->data);
+				break;
+			default:
+				break;
+			}
+		}
+
+		XFreeEventData(dpy, cookie);
+	} else if (xev.type == xrr_event_base + RRScreenChangeNotify)
+		reset_barriers();
+	else
+		dbg("[unexpected event; type=%d]\n", xev.type);
+}
+
+int main(int argc, char** argv)
+{
+	int xfd, nfds;
+	fd_set rfds;
 	unsigned char mask_bits[XIMaskLen(XI_LASTEVENT)] = { 0, };
 	XIEventMask mask = {
 		.deviceid = XIAllMasterDevices,
@@ -431,32 +496,31 @@ int main(int argc, char** argv)
 
 	XRRSelectInput(dpy, rootwin, RRScreenChangeNotifyMask);
 
+	setup_sighdlr();
+
+	xfd = XConnectionNumber(dpy);
+	nfds = (xfd > sigpipe[0]) ? xfd + 1 : sigpipe[0] + 1;
+
 	XSync(dpy, False);
 	for (;;) {
-		XNextEvent(dpy, &xev);
+		FD_ZERO(&rfds);
+		FD_SET(xfd, &rfds);
+		FD_SET(sigpipe[0], &rfds);
 
-		if (xev.type == GenericEvent) {
-			cookie = &xev.xcookie;
-			if (!XGetEventData(dpy, cookie))
+		if (select(nfds, &rfds, NULL, NULL, NULL) < 0) {
+			if (errno == EINTR)
 				continue;
+			perror("select");
+			exit(1);
+		}
 
-			if (cookie->extension == xi2_opcode) {
-				switch (cookie->evtype) {
-				case XI_BarrierHit:
-					handle_barrier_hit(cookie->data);
-					break;
-				case XI_BarrierLeave:
-					handle_barrier_leave(cookie->data);
-					break;
-				default:
-					break;
-				}
-			}
+		if (FD_ISSET(sigpipe[0], &rfds)) {
+			teardown_barriers();
+			XCloseDisplay(dpy);
+			exit(0);
+		}
 
-			XFreeEventData(dpy, cookie);
-		} else if (xev.type == xrr_event_base + RRScreenChangeNotify)
-			reset_barriers();
-		else
-			dbg("[unexpected event; type=%d]\n", xev.type);
+		if (FD_ISSET(xfd, &rfds))
+			handle_xevent();
 	}
 }

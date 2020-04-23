@@ -111,7 +111,7 @@ static inline struct pbinfo* find_pbi(PointerBarrier pb)
 	struct pbinfo k = { .bar = pb, };
 	v = tfind(&k, &pbmap, pbcmp);
 	if (!v)
-		internal_error("PointerBarrier %lu not found", pb);
+		return NULL;
 	return *(struct pbinfo**)v;
 }
 
@@ -138,6 +138,11 @@ static inline double dnow(void)
 static void handle_barrier_leave(XIBarrierEvent* event)
 {
 	struct pbinfo* pbi = find_pbi(event->barrier);
+	if (!pbi) {
+		dbg("BarrierLeave on unknown (stale?) barrier %lu\n", event->barrier);
+		return;
+	}
+
 	dbg("BarrierLeave [%lu], delta: %.2f/%.2f\n", event->barrier, event->dx, event->dy);
 
 	switch (releasemode) {
@@ -162,6 +167,11 @@ static void handle_barrier_hit(XIBarrierEvent* event)
 	int release;
 	double d, now;
 	struct pbinfo* pbi = find_pbi(event->barrier);
+	if (!pbi) {
+		dbg("BarrierHit on unknown (stale?) barrier %lu\n", event->barrier);
+		return;
+	}
+
 	dbg("BarrierHit [%lu], delta: %.2f/%.2f\n", event->barrier, event->dx, event->dy);
 
 	switch (pbi->dir) {

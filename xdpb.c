@@ -23,9 +23,6 @@
  * IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* To expose tdestroy(3) in search.h */
-#define _GNU_SOURCE 1
-
 #include <time.h>
 #include <math.h>
 #include <stdlib.h>
@@ -326,26 +323,20 @@ static void setup_barriers(void)
 	XRRFreeScreenResources(resources);
 }
 
-static void destroy_pbi(const void* nodep, const VISIT which, const int depth)
+static void teardown_barriers(void)
 {
 	struct pbinfo* pb;
 
-	if (which != postorder && which != leaf)
-		return;
-
-	pb = *(struct pbinfo**)nodep;
-	XFixesDestroyPointerBarrier(dpy, pb->bar);
-	dbg("delbar(%lu)\n", pb->bar);
+	while (pbmap) {
+		pb = *(struct pbinfo**)pbmap;
+		tdelete(pb, &pbmap, pbcmp);
+		XFixesDestroyPointerBarrier(dpy, pb->bar);
+		dbg("delbar(%lu)\n", pb->bar);
 #ifdef DEBUG
-	XSync(dpy, False);
+		XSync(dpy, False);
 #endif
-}
-
-static void teardown_barriers(void)
-{
-	twalk(pbmap, destroy_pbi);
-	tdestroy(pbmap, free);
-	pbmap = NULL;
+		free(pb);
+	}
 }
 
 static void reset_barriers(void)

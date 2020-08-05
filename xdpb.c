@@ -27,6 +27,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 #include <getopt.h>
@@ -286,38 +287,162 @@ static void mkbar(int x1, int y1, int x2, int y2, int directions)
 	add_pbi(pbi);
 }
 
-static void setup_crtc_barriers(XRRCrtcInfo* ci)
+static int point_within_crtc(XRRCrtcInfo* ci, int x, int y)
+{
+	int xmin = ci->x, xmax = ci->x + ci->width - 1;
+	int ymin = ci->y, ymax = ci->y + ci->height - 1;
+	return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
+}
+
+static int point_on_any_crtc(int ncrtc, XRRCrtcInfo** crtcinfos, int x, int y)
+{
+	for (int i = 0; i < ncrtc; i++) {
+		if (point_within_crtc(crtcinfos[i], x, y))
+			return 1;
+	}
+
+	return 0;
+}
+
+/*
+ * Traverse a line (assumed to be a screen edge) between XSTART,YSTART and
+ * XEND,YEND creating barriers along it in direction DIR for any segments for
+ * which the next pixel over in the opposite direction of DIR is within one of
+ * the NCRTC crtcs in CRTCINFOS.
+ */
+static void scan_edge(int ncrtc, XRRCrtcInfo** crtcinfos, int xstart, int ystart,
+                      int xend, int yend, int dir)
+{
+	int x, y; /* current point along the line */
+	int dx, dy; /* x/y delta for moving along the line we're scanning */
+	int qx, qy; /* x/y delta for the neighbor point whose existence we query */
+	int within_internal_edge = 0; /* state bit */
+	int barstart_x, barstart_y; /* where the current barrier started */
+
+	int xmin = xstart < xend ? xstart : xend;
+	int xmax = xstart > xend ? xstart : xend;
+	int ymin = ystart < yend ? ystart : yend;
+	int ymax = ystart > yend ? ystart : yend;
+
+	switch (dir) {
+	case BarrierPositiveX:
+		assert(xstart == xend);
+		assert(ystart != yend);
+		dx = 0;
+		dy = yend > ystart ? 1 : -1;
+		qx = -1;
+		qy = 0;
+		break;
+
+	case BarrierPositiveY:
+		assert(xstart != xend);
+		assert(ystart == yend);
+		dx = xend > xstart ? 1 : -1;
+		dy = 0;
+		qx = 0;
+		qy = -1;
+		break;
+
+	case BarrierNegativeX:
+		assert(xstart == xend);
+		assert(ystart != yend);
+		dx = 0;
+		dy = yend > ystart ? 1 : -1;
+		qx = 1;
+		qy = 0;
+		break;
+
+	case BarrierNegativeY:
+		assert(xstart != xend);
+		assert(ystart == yend);
+		dx = xend > xstart ? 1 : -1;
+		dy = 0;
+		qx = 0;
+		qy = 1;
+		break;
+
+	default:
+		internal_error("bad direction %d in %s\n", dir, __func__);
+	}
+
+	for (x = xstart, y = ystart;
+	     x >= xmin && x <= xmax && y >= ymin && y <= ymax;
+	     x += dx, y += dy) {
+		int nx = x + qx, ny = y + qy; /* neighbor x/y */
+
+		/*
+		 * If the neighbor point exists on a screen, we must be
+		 * somewhere along an internal screen edge.
+		 */
+		int internal_edge = point_on_any_crtc(ncrtc, crtcinfos, nx, ny);
+
+		if (!within_internal_edge && internal_edge) {
+			/* record barrier starting point */
+			barstart_x = x;
+			barstart_y = y;
+		} else if (within_internal_edge && !internal_edge) {
+			/*
+			 * Okay, we've hit the end of an internal-edge
+			 * segment; now pop up a barrier along it.
+			 */
+			int barend_x = x - dx, barend_y = y - dy;
+			mkbar(barstart_x, barstart_y, barend_x, barend_y, dir);
+		}
+
+		within_internal_edge = internal_edge;
+	}
+
+	/*
+	 * If we found the beginning of an internal-edge segment but never ran
+	 * off the end of it, it must run all the way to the edge of the
+	 * screen; handle that here.
+	 */
+	if (within_internal_edge) {
+		int barend_x = x - dx, barend_y = y - dy;
+		mkbar(barstart_x, barstart_y, barend_x, barend_y, dir);
+	}
+}
+
+static void setup_crtc_barriers(XRRCrtcInfo* ci, int ncrtc, XRRCrtcInfo** crtcinfos)
 {
 	unsigned int xmin = ci->x, xmax = ci->x + ci->width - 1;
 	unsigned int ymin = ci->y, ymax = ci->y + ci->height - 1;
 
 	dbg("%s(%u, %u, %u, %u)\n", __func__, xmin, xmax, ymin, ymax);
 
-	mkbar(xmin, ymin, xmin, ymax, BarrierPositiveX);
-	mkbar(xmax, ymin, xmax, ymax, BarrierNegativeX);
-	mkbar(xmin, ymin, xmax, ymin, BarrierPositiveY);
-	mkbar(xmin, ymax, xmax, ymax, BarrierNegativeY);
+	scan_edge(ncrtc, crtcinfos, xmin, ymin, xmin, ymax, BarrierPositiveX);
+	scan_edge(ncrtc, crtcinfos, xmax, ymin, xmax, ymax, BarrierNegativeX);
+	scan_edge(ncrtc, crtcinfos, xmin, ymin, xmax, ymin, BarrierPositiveY);
+	scan_edge(ncrtc, crtcinfos, xmin, ymax, xmax, ymax, BarrierNegativeY);
 }
 
 static void setup_barriers(void)
 {
 	int i;
-	XRRCrtcInfo* crtcinfo;
+	XRRCrtcInfo** crtcinfos;
 	XRRScreenResources* resources = XRRGetScreenResources(dpy, rootwin);
 
-	for (i = 0; i < resources->ncrtc; i++) {
-		crtcinfo = XRRGetCrtcInfo(dpy, resources, resources->crtcs[i]);
+	crtcinfos = xmalloc(resources->ncrtc * sizeof(*crtcinfos));
 
+	for (i = 0; i < resources->ncrtc; i++)
+		crtcinfos[i] = XRRGetCrtcInfo(dpy, resources, resources->crtcs[i]);
+
+	for (i = 0; i < resources->ncrtc; i++) {
 		/*
 		 * For some reason there seems to be some magical N+1th
 		 * pseudo-CRTC with width == 0 and height == 0; let's not try
 		 * to set up pointer barriers around that one.
 		 */
-		if (crtcinfo->width > 0 && crtcinfo->height > 0)
-			setup_crtc_barriers(crtcinfo);
-
-		XRRFreeCrtcInfo(crtcinfo);
+		if (crtcinfos[i]->width > 0 && crtcinfos[i]->height > 0)
+			setup_crtc_barriers(crtcinfos[i], resources->ncrtc, crtcinfos);
+		else
+			dbg("skipping %dx%d crtc %d\n", crtcinfos[i]->width, crtcinfos[i]->height, i);
 	}
+
+	for (i = 0; i < resources->ncrtc; i++)
+		XRRFreeCrtcInfo(crtcinfos[i]);
+
+	free(crtcinfos);
 
 	XSync(dpy, False);
 	XRRFreeScreenResources(resources);
